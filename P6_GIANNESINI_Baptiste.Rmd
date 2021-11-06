@@ -1,0 +1,794 @@
+---
+title: "librairie lapage - analyse des ventes"
+author: "GIANNESINI Baptiste"
+date: "16/08/2021"
+output:
+  html_document:
+    df_print: default
+    theme: readable
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+![](https://user.oc-static.com/upload/2020/11/23/16061367402655_Capture%20d%E2%80%99e%CC%81cran%202020-11-23%20a%CC%80%2014.05.04.png) 
+
+# Résumé de la mission:
+
+Consultant Data Analyst chez Lapage, rattaché au service Marketing, nous nous voyons confier un audit des ventes en ligne.
+
+```{r setup, include=FALSE}
+
+# Import des packages
+
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message = FALSE)
+
+library(tidyverse)
+library(ineq)
+library(scales)
+library(rAmCharts)
+library(kableExtra)
+library(crosstable)
+
+library(gmodels)
+
+#import des données
+
+clients = read.csv("customers.csv")
+produits = read.csv("products.csv", sep=",", dec=".")
+transactions = read.csv("transactions.csv", sep=",", dec=".")
+
+# Variables et fonctions
+
+# jointure produit et transaction:
+trans_produit = merge(produits, transactions, on="id_prod")
+
+# jointure produit/transaction avec clients:
+data = merge(trans_produit,clients, on="client_id")
+
+# age des clients:
+data$age <- 2021-data$birth
+
+
+data$price = ifelse(test = data$price < 0, 0, data$price)
+
+
+# mise en forme des données
+
+# transformation des dates en format date
+
+data$date = as.Date(data$date)
+data$year = as.numeric(format(data$date, format = "%Y"))
+data$month = as.numeric(format(data$date, format = "%m"))
+data$quarter = paste("Q",ceiling(as.numeric(data$month) / 3), sep="")
+
+# Mise en forme string des mois (01, 02, ..., 11, 12)
+
+data$month=ifelse(test=data$month<10,paste("0",as.character(data$month), sep=""),as.character(data$month))
+
+#règle de sturge
+N = 92-17
+K = 1+(10/3*log10(N))
+K
+
+# Découpage "idéal" de notre population en "tranche d'age" d'environ 7 années afin d'assurer la lisibilité des graphiques.
+
+data = data %>%
+  mutate( 
+    # Create catégories
+    age_group = dplyr::case_when( 
+      data$age <= 24 ~"0-24",
+      data$age > 24 & age <= 31 ~"25-31",
+      data$age > 31 & age <= 38 ~"32-38",
+      data$age > 38 & age <= 45 ~"39-45",
+      data$age > 45 & age <= 52 ~"46-52",
+      data$age > 52 & age <= 59 ~"53-59",
+      data$age > 59 & age <= 66 ~"60-66",
+      data$age > 66 & age <= 73 ~"67-73",
+      data$age > 73 & age <= 80 ~"74-80",
+      data$age > 80 & age <= 87 ~"81-87",
+      data$age >=88  ~">87",
+      )
+    ,
+    # Convert to factor
+    age_group = factor( 
+      age_group,
+      levels = c("0-24", "25-31", "32-38", "39-45", "46-52", "53-59", "60-66", "67-73", "74-80", "81-87", ">87" )
+      ))
+# ajout de booleens pour les références 2_159 et 0_525
+
+data = data %>%
+  mutate(ref_2=ifelse(id_prod == "2_159", 1, 0), ref_0=ifelse(id_prod=="0_525", 1, 0))
+```
+
+# Chiffre d'affaire par périodes:
+## CA total:
+```{r,echo=FALSE,warning=FALSE}
+
+totalCA=sum(data$price)
+totalCA_round= round(totalCA/1000000, digits=2)
+
+```
+Sur la période d'exploitation, le CA total est de **`r totalCA_round` Millions** d'euros.
+
+## CA Annuel
+```{r,echo=FALSE, warning=FALSE}
+
+# CA par année
+data %>%
+  group_by(year) %>%
+  summarise(annual_CA = sum(price)) %>%
+  ggplot(aes(x=year, y=annual_CA))+
+  scale_y_continuous(name="CA Annuel", labels=comma)+
+  scale_x_continuous(name="Année")+
+  geom_bar(stat="identity", position=position_dodge(), color="darkblue", fill="#3976fa")+
+  ggtitle("Chiffre d'Affaire Annuel", subtitle="Sur la période d'exploitation")+
+  theme_light()
+
+```
+
+L'étude du CA annuel sur cette période montre une évolution très **favorable** du CA entre **2021** et **2022**, et une évolution très **défavorable** entre **2022** et **2023**.
+
+Les données correspondant à deux années d'exploitations sont réparties d'une façon que nous ignorons sur 3 années civiles.
+
+Il conviendra d'affiner la précision temporelle pour espérer avoir de meilleurs indicateurs.
+
+## CA Trimestriel
+
+```{r,echo=FALSE,warning=FALSE}
+# CA par trimestre
+data %>%
+  group_by(year, quarter) %>%
+  summarise(quarter_CA = sum(price)) %>%
+  ggplot(aes(x=year, y=quarter_CA, fill=quarter))+
+  scale_y_continuous(name="CA Trimestriel", labels=comma)+
+  scale_x_continuous(name="Année")+
+  geom_bar(stat="identity", position=position_dodge()) +
+  ggtitle("Chiffre d'Affaire trimestriel", subtitle="Sur la période d'exploitation")+
+  theme_light()+
+  scale_fill_manual(values=c("#6abf67","#c65489", "#f48c46",  "#0286c8", "#000000"))
+                                                          
+```
+
+Cette visualisation nous permet de constater que :
+
+  - les ventes pour l'année 2023 ne concernent pour le moment que les ventes du premier trimestre.
+  - Les ventes du **Q1 2023** sont **plus élevées** que celles du **Q1 2021**
+  - les ventes par trimestre ont légèrement **augmenté entre 2021 et 2022**
+  - les **meilleurs résultats du Q1 2022** sont **peut-être un rebond** des **"moins bons" résultats du Q4 2021** (rupture de stock ?)
+  - Les ventes semblent assez constantes.
+  
+Pour tirer plus d'informations nous allons devoir à nouveau regarder sur une échelle de temps plus précise.
+
+
+## CA Mensuel
+```{r,echo=FALSE,warning=FALSE}
+# CA par mois
+
+data %>%
+  
+  group_by(year, month) %>%
+  summarise(month_CA = sum(price)) %>%
+  ggplot(aes(x=year, y=month_CA, fill=month))+
+  scale_y_continuous(name="CA Mensuel", labels=comma)+
+  scale_x_continuous(name="Année")+
+  geom_bar(stat="identity", position=position_dodge())+
+  ggtitle("Chiffre d'Affaire Mensuel", subtitle="Sur la période d'exploitation")+
+  theme_light()+
+  scale_fill_manual(values=c("#02af4e","#9bd092","#c5db5c", "#b4216f", "#db87a9", "#9463a8", "#f36621", "#fbb47c", "#ee563f", "#0072bf", "#68a6dd", "#4cc2f1", "#000000"  ))
+
+```
+
+Cette visualisation nous permet de constater que:
+
+  - Les ventes de l'année **2021, globalement en hausse**, correspondent aux 10 derniers mois
+  - Les ventes de l'année **2022 sont assez stables** hormis le Q1 qui est un tout petit peu plus élevé.
+  - Les ventes de l'année 2023 correspondent aux deux premiers mois
+  - On constate une **nette baisse des ventes en 10/2022** 
+  
+La baisse des ventes de la fin 2022 as-t'elle touché toutes les catégories?
+
+```{r, echo=FALSE, warning==FALSE}
+data %>%
+  filter(year=="2021") %>%
+  filter(month == c("07","08","09", "10", "11", "12")) %>%
+  group_by(month, categ) %>%
+  summarize(categCA = sum(price)) %>%
+  mutate(categ=as.character(categ)) %>%
+  ggplot(aes(x=month, y=categCA, fill=categ))+
+  scale_y_continuous(name="CA par catégorie", labels=comma)+
+  geom_bar(stat="identity", position=position_dodge())+
+  ggtitle("Ventes second semestre 2021", subtitle="par catégorie")+
+  theme_light()
+  
+```
+
+Sur cette visualisation nous pouvons comparer le mois 10/2021 aux autres mois du deuxième semestre 2021.
+
+Nous constatons que globalement les ventes de la **catégorie 0 et 2 ne sont pas vraiment différentes** de celles des autres mois (ni meilleures ni pires).
+
+En revanche, les choses sont très différentes pour ce qui concerne la **catégorie 1 dont les ventes se sont effondrées** comparativement aux autres mois.
+
+Causes probables: une rupture de stock? un fait d'actualité?
+
+# Tendances:
+
+## Top:
+
+```{r,echo=FALSE, warning=FALSE}
+TOP <- data %>%
+  group_by(id_prod, categ) %>%
+  summarize(product_CA = sum(price), pourcentage=((product_CA/totalCA)*100)) %>%
+  #filter(categ==2)%>%
+  arrange(desc(by_group = product_CA)) 
+ 
+
+kable(TOP[1:5,], caption="Top produits")%>%
+   kable_styling(bootstrap_options = "striped")
+  
+```
+
+Sur **3287** références en magasin, dont au moins une de test (T_0), **3266** ont été vendues au moins une fois, le catalogue semble donc pertinent.
+
+Les meilleures ventes sont:
+
+  - Catégorie 0 : **0_1441** avec **23,45K€** de CA soit **0.20%** du CA total
+  - Catégorie 1 : **1_395** avec **54.35K€** de CA soit **0.46%** du CA total
+  - Catégorie 2 : **2_159** avec **94.89K€** de CA soit **0.80%** du CA total
+  
+## Flop:
+```{r,echo=FALSE, warning=FALSE}
+TOP <- TOP %>%
+  arrange(by_group = product_CA)
+
+kable(TOP[1:6,], caption = "FLOP produits") %>%
+  kable_styling(bootstrap_options = "striped")
+
+```
+
+Les produits vendus dont le CA est le plus bas sont:
+
+Sans surprise le produit de test T_0 avec un prix de 0€
+
+  - Pour la catégorie 0: **0_1539** avec un CA de **0,99€** soit **0.000008%** du CA total
+  - Pour la catégorie 1: **1_420** avec un CA de **14,24€** soit **0.00012%** du CA total
+  - Pour la catégorie 2: **2_81** avec un CA de **86,99€** soit **0.00073%** du CA total
+
+## Moyenne des prix par catégorie
+
+```{r}
+kable (data %>%
+  group_by(id_prod, categ)%>%
+  mutate(categ= as.character(categ))%>%
+  group_by(categ)%>%
+  summarize(moy_tarif=mean(price), med_tarif=median(price)), caption = "tarif moyen et médian par catégorie")%>%
+  kable_styling(bootstrap_options = "striped")
+```
+
+Avec un tarif moyen de:
+
+  - la catégorie 2 est la plus chère: **76.20€** (médiane:**62.83€**)
+  - la catégorie 1: **20.49€** (médiane:**19.08€**) 
+  - la catégorie 0 est la moins chère: **10.63€** (médiane:**9.99€**)
+
+```{r, echo=FALSE, warning=FALSE}
+data %>%
+  group_by(id_prod, categ)%>%
+  mutate(categ= as.character(categ))%>%
+  group_by(categ)%>%
+  ggplot(aes(x=price, y=categ)) +
+  geom_boxplot( color="darkblue", fill="#3976fa")+
+  ggtitle("variabilité des tarifs produits", subtitle="Par catégories")+
+  coord_flip()+
+  theme_light()
+```
+
+Même si l'on constate des outliers, tarifs "hors normes", dans toutes les catégories, les **écarts de prix sont les plus importants dans la catégorie 2**.
+
+
+
+Sans connaitre les intitulés des catégories, et à l'aide du placement tarifaire, on peut imaginer que:
+
+  - La catégorie 0 peut correspondre à des livres de poche ou des livres dits "club" (grand format de plus de 9 mois), ou occasions.
+  - La catégorie 1 peut correspondre à des livres en grand format en "avant-première" ou récemment sortis, ainsi qu'a des ebook ou livres audio.
+  - La catégorie 2 peut correspondre à des "coffrets de livres", des "collectors" beaucoup plus dispendieux.
+  
+CF: infographie [lien](https://www.images-chapitre.com/css/common/images/edito/Infographie-Prix-Du-Livre-En-France-630.jpg "prix du livre") de "chapitre.com"
+  
+  
+
+# Répartitions du CA:
+
+Intéressons nous maintenant à la répartition du CA afin de déterminer quelques tendances.
+
+## Répartition du CA par catégorie:
+```{r,echo=FALSE,warning=FALSE}
+
+# à revoir pour le label
+pie <- data %>%
+  group_by(categ) %>%
+  mutate(categ=as.character(categ)) %>%
+  rename(label = categ) %>%
+  summarize(categ_CA = sum(price),value = (sum(price)/totalCA*100))
+
+amPie(data = pie, depth = 20, main = "CA par catégorie"  )
+ 
+```
+
+Total du CA par catégorie:
+
+  - 0 : **4.42M€** soit **37.29%**
+  - 1 : **4.65M€** soit **39.26%**
+  - 2 : **2.78M€** soit **23.45%** 
+
+## Répartition du CA par client:
+
+```{r,echo=FALSE,warning=FALSE}
+
+
+data %>%
+  group_by(client_id) %>%
+  summarise(client_CA = sum(price)) %>%
+  ggplot(aes(x=client_id, y=client_CA))+
+  scale_y_continuous(name="CA client", labels=comma)+
+  geom_point()+
+  ggtitle("Chiffre d'Affaire par client", subtitle="Tous les clients")
+```
+
+Nous constatons que **4 clients** se détachent du reste de la clientèle de part leurs **total d'achat nettement plus élevé**.
+
+Regardons de plus près afin d'en savoir un peu plus
+
+```{r,echo=FALSE,warning=FALSE}
+data %>%
+  group_by(client_id) %>%
+  summarise(client_CA = sum(price)) %>%
+  filter(client_CA > 100000) %>%
+  ggplot(aes(x=client_id, y=client_CA))+
+  geom_point()+
+  ggtitle("Chiffre d'Affaire par client", subtitle="4 principaux clients")+
+  theme_light()
+```
+
+Nous voyons ici quatre clients dont les achats sont **supérieurs à 100K€**, en utilisant le rasoir d'Ockham nous pouvons émettre l'hypothèse que ce sont probablement:
+
+  - des particuliers se livrant à des opérations d'achat / revente
+  - des professionnels qui utilisent vos services pour réapprovisionner leurs stocks en urgence si les délais des éditeurs sont moins bons que les vôtres.
+
+Il convient néanmoins de vérifier cette hypothèse:
+
+```{r, echo=FALSE, warning=FALSE}
+# verification d'un des client pris au hazard parmis les 4
+vente <- data %>%
+  filter(client_id=="c_3454") %>%
+  group_by(id_prod, price) %>%
+  summarize(ca_produit=sum(price), nombre_ventes=(sum(price)/price)) %>%
+  arrange(desc(by_group = nombre_ventes)) %>%
+  distinct(id_prod, .keep_all = TRUE)
+  
+
+kable(vente[1:5,], caption = "produits les plus achetés par c_3454") %>%
+  kable_styling(bootstrap_options = "striped")
+```
+
+Nous constatons que **ces clients achètent un nombre restreint de références un grand nombre de fois** (souvent plus de 10 exemplaires de la même référence).
+
+Nous pouvons donc sans trop de risques considérer notre hypothèse valide et ces 4 clients comme des "professionnels".
+
+Mais quel est leur poids dans le CA total du site de vente?
+
+```{r, echo=FALSE, warning=FALSE}
+# verification poids des 4 clients dans les ventes totales
+whales <- data %>%
+  group_by(client_id, sex, age) %>%
+  summarise(client_CA = sum(price), pourcentage=round((client_CA/totalCA)*100, digits=2)) %>%
+  filter(client_CA > 100000) #%>%
+  #summarise(bigclients = sum(pourcentage), somme=sum(client_CA))
+  
+kable(whales, caption = "informations et CA des 4 plus gros clients")%>%
+  kable_styling(bootstrap_options = "striped")
+ 
+  
+```
+
+Ces 4 clients représentent individuellement:
+
+  - **0.96%** du CA total pour c_3454 avec **113,64K€**
+  - **1.30%** du CA total pour c_6714 avec **153.60K€**
+  - **2.44%** du CA total pour c_4958 avec **289.76K€**
+  - **2.73%** du CA total pour c_1609 avec **324.03K€**
+
+Tous ensembles ils représentent **881K€** soit **7.43% du CA total**.
+
+
+
+## Courbe de lorenz
+
+```{r,echo=FALSE,warning=FALSE}
+
+
+chiffre_affaire_byClient = data %>%
+  group_by(client_id) %>%
+  summarize(Client_CA = sum(price))
+
+plot(Lc(chiffre_affaire_byClient$Client_CA))
+
+```
+
+La courbe de Lorenz nous permet de visualiser la répartition du CA par client.
+
+On constate que la répartition n'est pas égalitaire.
+
+## Coefficient de Gini:
+```{r}
+# calcul du coefficient de Gini
+# https://fr.wikipedia.org/wiki/Coefficient_de_Gini
+coef_gini <- round(ineq(chiffre_affaire_byClient$Client_CA, type="Gini"), digits = 2)
+```
+
+l'indice de Gini : **`r coef_gini`** sur les données contenant tous les clients nous indique que la répartition est tout de même relativement équilibrée.
+
+L'indice serait plus faible (marquant une répartition plus égalitaire) en retirant les professionnels avant de faire le calcul.
+
+
+# Statistiques d'intêrets
+
+## Age des clients
+
+```{r}
+# nombre de clients par tranche d'age
+data %>%
+  group_by(age_group) %>%
+  summarise(custom_count_by_age = n_distinct(client_id)) %>%
+  ggplot( aes(x=custom_count_by_age, y=age_group))+
+  geom_col( color="darkblue", fill="#3976fa")+
+  ggtitle("répartition des clients", subtitle="par tranche d'age")+
+  theme_light()
+```
+
+Cette visualisation nous montre que les **"jeunes" et les "actifs" sont bien plus nombreux** dans le fichier client que les **"seniors"**.
+
+
+## Genre des clients
+
+```{r, echo=FALSE, warning=FALSE}
+kable(data %>%
+  group_by(sex, client_id)%>%
+  summarize(CA_by_genre = sum(price), pourcentage=((CA_by_genre/totalCA)*100), nombre= n_distinct(client_id) ) %>%
+  group_by(sex) %>%
+  mutate(sex=ifelse(sex=="m", "Homme", "Femme"))%>%
+  summarize(nombre= n_distinct(client_id), pourcentage = round(((nombre/8602)*100 ), digits = 2)), caption = "Hommes, Femmes, nombre et pourcentage") %>%
+  kable_styling(bootstrap_options = "striped")
+```
+Avec **8602** clients au total dont un de test (ct_0) compté dans les effectifs féminins, les effectifs sont répartis de la façon suivante:
+
+  - Femmes : **4480** soit **52.1%**
+  - Hommes : **4122** soit **47.9%**
+
+
+## CA par genre des clients
+
+```{r, echo=FALSE, warning=FALSE}
+kable(data %>%
+  group_by(sex)%>%
+  mutate(sex=ifelse(sex=="m", "Homme", "Femme"))%>%
+  summarize(CA_by_genre = sum(price), pourcentage=round(((CA_by_genre/totalCA)*100), digits = 2)), caption = "Hommes, Femmes, CA et Pourcentages")%>%
+  kable_styling(bootstrap_options = "striped")
+  
+
+```
+
+Le CA est globalement bien réparti entre les genres avec **49.43%** de Femmes et **50.57%** d'Hommes.
+
+Nous pourrions en déduire que les Hommes achètent pour une valeur moyenne plus élevée que les Femmes, mais ces données contiennent aussi nos professionnels dont les 3/4 sont des hommes.
+
+
+
+## Genre du client et catégories de produits achetés
+
+
+```{r, echo=FALSE, warning=FALSE}
+# CA par Genre du client et catégorie de produit acheté
+
+data %>%
+  group_by(sex, categ) %>%
+  mutate(sex=ifelse(sex=="m", "Homme", "Femme")) %>%
+  summarise(CA_by_genre = sum(price)) %>%
+  ggplot(aes(x=categ, y=CA_by_genre, fill=sex))+
+  geom_bar(stat="identity", position=position_dodge())+
+  ggtitle("Chiffre d'Affaire par catégorie", subtitle="distinction Femme/Homme")+
+  theme_light()+
+  scale_fill_manual(values=c("#e827b1","#2791e8"))
+
+
+```
+
+Cette visualisation nous indique que les **Femmes sont plus clientes de la catégorie 1** que les Hommes.
+
+A contrario, **les hommes** sont un peu **plus clients des catégories 0 et 2**.
+
+Les différences restent néanmoins assez peu marquées.
+
+## Correlation entre sexe et catégorie achetée?
+
+
+
+```{r, include=TRUE, warning=FALSE}
+
+
+nb_by_genre <- data %>%
+  group_by(categ) %>%
+  mutate(categ = as.factor(categ), m_CA = ifelse(sex=="m", price, 0), f_CA= ifelse(sex=="f", price, 0)) %>%
+  select(categ, m_CA, f_CA)%>%
+  group_by(categ)%>%
+  summarise(Homme=n_distinct(m_CA), Femme=n_distinct(f_CA))
+  
+kable(nb_by_genre, caption="Nombre de ventes de chaque catégorie en fonction du sexe")%>%
+  kable_styling(bootstrap_options = 'striped')
+  
+
+```
+
+**H0** (hypothèse nulle) la catégorie de livre acheté est indépendante du sexe de l'acheteur
+
+**Ha** (hypothèse alternative) La catégorie de livre acheté dépend du sexe de l'acheteur
+
+
+```{r}
+nb_by_genre <- nb_by_genre %>%
+  select(Homme, Femme)
+test <- chisq.test(nb_by_genre)
+kable(test$expected, caption="valeurs théoriques pour H0" )%>%
+  kable_styling(bootstrap_options = "striped")
+
+
+
+```
+
+Les effectifs théoriques étant > à 5 , l'effectif total est > à 30, l'échantillon est de taille suffisante pour procéder à un test du Khi2
+
+```{r}
+ddl <- test$parameter
+
+khi2 <- round(test$statistic, digits=2)
+pval <- round(test$p.value, digits=2)
+
+
+```
+ 
+
+Notre test donne un résultat de **`r khi2`**, avec un degré de liberté de 4, et une p-value de **`r pval`**.
+
+
+Le risque d'erreur généralement accepté étant de 5% soit 0.05, la **p-value est > au risque d'erreur**, ce qui ne nous **permet pas de rejeter H0**.
+
+
+
+
+
+
+## catégorie et age du client
+
+```{r}
+# CA par age du client et catégorie de produit acheté
+data %>%
+  group_by(age_group, categ) %>%
+  summarize(CA_by_age = sum(price)) %>%
+  mutate(category=as.character(categ)) %>%
+  ggplot(aes(x=age_group, y=CA_by_age, fill=category)) + 
+  geom_bar(stat="identity")+
+  ggtitle("Chiffre d'Affaire par tranche d'age", subtitle="catégorie cummulatif")+
+  theme_light()
+  
+```
+
+Cette visualisation nous montre que :
+
+  - la **majorité des ventes** est faite auprès des **"jeunes"** et des **"actifs"** (0-66 ans)
+  - les **ventes baissent** de plus en plus avec **l'augmentation de l'age** chez les "seniors" (67+)
+  
+Ces résultats peuvent être causés par:
+
+  - un désintérêt progressif de la lecture par la population "senior" (peu probable)
+  - Une population moins nombreuse sur le support de vente (site en ligne - très probable) 
+
+Concernant les résultats par catégorie:
+
+  - les **catégorie 0 et 1** sont très **fortement vendues** auprès de la population **"active"**
+  - la **catégorie 2** est achetée **principalement** par les **"jeunes"**
+  - les **"actifs"** n'achètent la **catégorie 2 que de façon marginale** (probablement en cadeaux pour leurs "jeunes")
+  
+
+
+## Age des clients et montant total des achats
+
+```{r}
+data %>%
+  group_by(client_id, age) %>%
+  summarise(caClient = sum(price)) %>%
+  filter(caClient < 100000) %>%
+  group_by(age)%>%
+  summarise(total_buy_by_age = sum(caClient))%>%
+  ggplot(aes(x=age, y=total_buy_by_age))+
+  scale_y_continuous(name="Total des achats par age", labels=comma)+
+  scale_x_continuous(name="Age")+
+  geom_line()+
+  ggtitle("Chiffre d'Affaire par age", subtitle="a l'exception des professionnels")+
+  theme_light()
+  
+```
+
+Cette visualisation nous montre que le **CA est le plus élevé** auprès des jeunes de **17 ans** ce qui s'explique par **leur grand nombre** et **leur gout pour les livres de la catégorie 2** dont les tarifs peuvent être vraiment élevés.
+
+Nous constatons aussi que les ventes connaissent un nouveau **pic** pour la clientèle d'environ **40 ans** puis commencent très rapidement à **baisser de façon assez régulière** au fur et à mesure que l'age augmente.
+
+Cela correspond à **la baisse des effectifs de clients** qui peut s'expliquer très facilement, ce ne devrait donc pas être une source d'inquiétudes.
+
+## Correlation entre age et montant des achats.
+
+```{r}
+ca_by_age <- data %>%
+  group_by(client_id, age) %>%
+  summarise(caClient = sum(price)) %>%
+  filter(caClient < 100000) %>%
+  group_by(age)%>%
+  summarise(buy_by_age = sum(caClient))
+
+pearResult <- round(cor(x=ca_by_age$age, y=ca_by_age$buy_by_age, method= "pearson"), digits=2)
+```
+
+le coefficient de corrélation de pearson entre l'age et le CA donne le résultat suivant:
+
+**`r pearResult`** 
+
+Ce coefficient non nul nous **confirme une forte corrélation entre l'age du client et le montant des achats**.
+
+de plus il est négatif, cela signifie que le **montant des achats baisse au fur et à mesure que l'age augmente**.
+
+## Age des clients et panier moyen
+
+```{r}
+# panier moyen par tranche d'age
+
+
+data %>%
+  group_by(session_id, age_group) %>%
+  summarize(session_somme= sum(price)) %>%
+  group_by(age_group) %>%
+  summarise(panier_moyen = mean(session_somme)) %>%
+  ggplot(aes(x=panier_moyen, y=age_group)) +
+  geom_point(stat="identity")+
+  coord_flip()+
+   ggtitle("Panier moyen par tranche d'age", subtitle="")+
+  theme_light()
+```
+
+Nous constatons que les jeunes friands de la plus chère catégorie 2 ont un panier moyen entre 2 et 3 fois plus élevé que les autres tranches d'age.
+
+```{r}
+# panier moyen par age
+data %>%
+  group_by(session_id, age) %>%
+  summarize(session_somme= sum(price)) %>%
+  group_by(age) %>%
+  summarise(panier_moyen = mean(session_somme)) %>%
+  ggplot(aes(x=age, y=panier_moyen)) +
+  geom_line(stat="identity")+
+  ggtitle("panier moyen par age", subtitle="en €")+
+  theme_light()
+  
+```
+
+Mêmes constats sur cette visualisation plus précise au niveau des ages.
+
+Cependant en prenant en compte la tarification moyenne des catégories d'articles et les conclusions précédentes sur les habitudes d'achats en fonction de l'age, il est fort probable que les jeunes achètent moins d'articles que les autres catégories d'age.
+
+  
+vérifions cette hypothèse:
+
+```{r}
+data %>%
+  group_by(session_id, age_group) %>%
+  summarize(nombre_article=n_distinct(id_prod)) %>%
+  ggplot(aes(x=nombre_article, y=age_group)) +
+  geom_boxplot( color="darkblue", fill="#3976fa")+
+  ggtitle("Variation du nombre d'articles dans le panier moyen", subtitle="Par tranche d'age")+
+  coord_flip()+
+  theme_light()
+```
+
+La variation du nombre d'articles dans le panier moyen ne nous est pas d'une aide indiscutable, nous allons donc nous intéresser à d'autres chiffres
+
+```{r}
+
+nb_article <- data %>%
+  group_by(session_id, age_group, categ) %>%
+  summarize(nombre_article=n_distinct(id_prod)) %>%
+  distinct(session_id, .keep_all = TRUE) 
+
+tableau <- table(nb_article$age_group, nb_article$categ)
+kable(addmargins(tableau), caption="nombre de ventes par tranche d'age et catégorie")%>%
+  kable_styling(bootstrap_options = "striped")
+
+#data %>%
+#  group_by(age_group) %>%
+#  summarise(custom_count_by_age = n_distinct(client_id))
+
+```
+
+Nous constatons que les 0-24 ans pourtant beaucoup plus nombreux ont acheté au total moins de produit que la plupart des actifs ce qui aurait tendance à confirmer notre hypothèse.
+
+
+
+
+
+
+
+## Age des clients et fréquence d'Achat
+
+
+```{r}
+data %>%
+  group_by(client_id) %>%
+  summarize(frequence_by_client = n_distinct(session_id), age_group) %>%
+  filter(frequence_by_client<1500) %>%
+  ggplot(aes(x=frequence_by_client, y=age_group)) +
+  geom_boxplot( color="darkblue", fill="#3976fa")+
+  ggtitle("variabilité des fréquences d'achat", subtitle="Par tranche d'age")+
+  coord_flip()+
+  theme_light()
+```
+
+Sur la période d'exploitation (24 mois):
+
+  - les **0-24** ans ont tendance à faire des achats seulement **une fois par mois** (médiane à 25 sessions/client)
+  - l'Outlier du groupe d'age 0-24 correspond probablement au "professionnel" de 22 ans.
+  - le **record du nombre d'achats mensuels** (entre 2 et 4) est pour la tranche des **32-38 ans** (médiane à 75 session/client et 3ème quartile au delà des 100 session/clients)
+  - on remarque que les **seniors n'achètent pas moins souvent que les autres** tranche d'age (entre 1 et 3 achats mensuels)
+
+# probabilités
+
+```{R, echo=TRUE}
+#data2 = subset(data, ref_2==1 | ref_0==1)
+
+
+# ref_2="2_159" et ref_0="0.525"
+
+data %>%
+  group_by(client_id)%>%
+  summarize(ref_2=(ifelse(mean(ref_2)>0, 1,0)), ref_0=(ifelse(mean(ref_0)>0, 1 ,0))) %>%
+  filter((ref_2==1) & (ref_0==1)) %>%
+  summarize(nombre = n_distinct(client_id))
+  
+  #filter(ref_0==1) : 459
+  #filter(ref_2==1) : 530
+  #filter(ref_2==1 & ref_0==1) : 459
+  #filter(ref_2==1 & ref_0==0) : 71
+  #filter(ref_2==0 & ref_0==1) : 0
+```
+
+## Calcul de proba P(AB)=P(A&B)/P(A)
+
+```{r, echo=TRUE}
+# P(AB) = (459/8602)/(530/8602)
+459/530
+```
+Sur les **8602** clients du site:
+
+  - **530** clients ont acheté **"2_159"** (6.1%)
+  - **459** clients ont acheté **"0_525"** (5.3%)
+  - **459** clients ont acheté **les deux références** (5.3%)
+  - **71** clients ont acheté **"2_159" et pas "0_525"** (0.8%)
+  - **0** clients ont acheté **"0_525" et pas "2_159"**(0%)
+
+La probabilité qu'un client **ait déjà acheté "2_159" s'il achète "0_525"** est de 100%
+
+La probabilité qu'un client **achète "0_525" s'il a déjà acheté "2_159"** est de 86.6%
+
+
+```{r, include=FALSE}
+# Annexes
+
+## données de test
+data %>%
+  filter(price <= 0)
+```
